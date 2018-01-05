@@ -1,0 +1,12 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Resources:
+  TestFunction:
+    Properties:
+      CodeUri: s3://robowebi-foo/4fd7bec10e769bc905038ce0a2f0179e
+      Environment:
+        Variables:
+          S3_BUCKET: robowebi-foo
+      Handler: index.handler
+      Runtime: nodejs6.10
+    Type: AWS::Serverless::Function
+Transform: AWS::Serverless-2016-10-31

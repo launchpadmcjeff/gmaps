@@ -1,0 +1,15 @@
+{
+  "operation": "update",
+  "tableName": "LambdaTable",
+  "payload": {
+    "Key": {
+      "Id": "3",
+      "Name": "Mallory"
+    },
+    "UpdateExpression": "set rating = rating + :n",
+    "ExpressionAttributeValues": {
+      ":n": 1
+    },
+    "ReturnValues": "UPDATED_NEW"
+  }
+}

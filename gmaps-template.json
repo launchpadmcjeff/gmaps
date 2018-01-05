@@ -1,0 +1,726 @@
+{
+    "AWSTemplateFormatVersion": "2010-09-09",
+    "Parameters": {
+        "ServiceName": {
+            "Type": "String",
+            "Default": "TimeService",
+            "Description": "Name for the service, used in the code repository, Lambda function, and pipeline names"
+        },
+        "GitHubUser": {
+            "Type": "String",
+            "Description": "GitHub User",
+            "Default": "launchpadmcjeff"
+        },
+        "GitHubRepo": {
+            "Type": "String",
+            "Description": "GitHub Repo to pull from. Only the Name. not the URL",
+            "Default": "gmaps"
+        },
+        "GitHubBranch": {
+            "Type": "String",
+            "Description": "GitHub Branch",
+            "Default": "master"
+        },
+        "GitHubToken": {
+            "NoEcho": true,
+            "Type": "String",
+            "Description": "Secret. It might look something like 9b189a1654643522561f7b3ebd44a1531a4287af OAuthToken with access to Repo. Go to https://github.com/settings/tokens"
+        }
+    },
+    "Resources": {
+        "BuildArtifactsBucket": {
+            "Type": "AWS::S3::Bucket"
+        },
+        "CodeBuildServiceRole": {
+            "Type": "AWS::IAM::Role",
+            "Properties": {
+                "AssumeRolePolicyDocument": {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Action": [
+                                "sts:AssumeRole"
+                            ],
+                            "Effect": "Allow",
+                            "Principal": {
+                                "Service": [
+                                    "codebuild.amazonaws.com"
+                                ]
+                            }
+                        }
+                    ]
+                },
+                "Path": "/",
+                "Policies": [
+                    {
+                        "PolicyName": "CodeBuildAccess",
+                        "PolicyDocument": {
+                            "Version": "2012-10-17",
+                            "Statement": [
+                                {
+                                    "Effect": "Allow",
+                                    "Resource": [
+                                        {
+                                            "Fn::Sub": "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/${ServiceName}_build"
+                                        },
+                                        {
+                                            "Fn::Sub": "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/${ServiceName}_build:*"
+                                        }
+                                    ],
+                                    "Action": [
+                                        "logs:CreateLogGroup",
+                                        "logs:CreateLogStream",
+                                        "logs:PutLogEvents"
+                                    ]
+                                },
+                                {
+                                    "Effect": "Allow",
+                                    "Resource": [
+                                        {
+                                            "Fn::Sub": "arn:aws:s3:::${BuildArtifactsBucket}/*"
+                                        }
+                                    ],
+                                    "Action": [
+                                        "s3:GetObject",
+                                        "s3:GetObjectVersion",
+                                        "s3:PutObject"
+                                    ]
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+        },
+        "CodeBuildProject": {
+            "Type": "AWS::CodeBuild::Project",
+            "Properties": {
+                "Name": {
+                    "Fn::Sub": "${ServiceName}_build"
+                },
+                "Description": "Build project for the Lambda service",
+                "Artifacts": {
+                    "Type": "CODEPIPELINE"
+                },
+                "Environment": {
+                    "Type": "LINUX_CONTAINER",
+                    "ComputeType": "BUILD_GENERAL1_SMALL",
+                    "Image": "aws/codebuild/eb-nodejs-4.4.6-amazonlinux-64:2.1.3",
+                    "EnvironmentVariables": [
+                        {
+                            "Name": "BUILD_OUTPUT_BUCKET",
+                            "Value": {
+                                "Ref": "BuildArtifactsBucket"
+                            }
+                        }
+                    ]
+                },
+                "ServiceRole": {
+                    "Fn::GetAtt": [
+                        "CodeBuildServiceRole",
+                        "Arn"
+                    ]
+                },
+                "Source": {
+                    "Type": "CODEPIPELINE"
+                }
+            }
+        },
+        "StartTestsFunctionExecutionRole": {
+            "Type": "AWS::IAM::Role",
+            "Properties": {
+                "AssumeRolePolicyDocument": {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Action": [
+                                "sts:AssumeRole"
+                            ],
+                            "Effect": "Allow",
+                            "Principal": {
+                                "Service": [
+                                    "lambda.amazonaws.com"
+                                ]
+                            }
+                        }
+                    ]
+                },
+                "Path": "/",
+                "Policies": [
+                    {
+                        "PolicyName": "InvokeAsync",
+                        "PolicyDocument": {
+                            "Version": "2012-10-17",
+                            "Statement": [
+                                {
+                                    "Action": [
+                                        "lambda:InvokeAsync",
+                                        "lambda:InvokeFunction",
+                                        "cloudformation:DescribeStacks",
+                                        "codepipeline:*",
+                                        "logs:*"
+                                    ],
+                                    "Effect": "Allow",
+                                    "Resource": "*"
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+        },
+        "StartTestsFunction": {
+            "Type": "AWS::Lambda::Function",
+            "Properties": {
+                "FunctionName": {
+                    "Fn::Sub": "${ServiceName}_start_tests"
+                },
+                "Description": {
+                    "Fn::Sub": "Starts integration tests function ${ServiceName}"
+                },
+                "Handler": "index.lambda_handler",
+                "MemorySize": 128,
+                "Role": {
+                    "Fn::GetAtt": [
+                        "StartTestsFunctionExecutionRole",
+                        "Arn"
+                    ]
+                },
+                "Runtime": "python2.7",
+                "Timeout": 10,
+                "Code": {
+                    "ZipFile": "import json\nimport boto3\nimport uuid\ncp = boto3.client(\"codepipeline\")\ncf = boto3.client(\"cloudformation\")\nlambda_client = boto3.client(\"lambda\")\ndef lambda_handler(event, context):\n    print json.dumps(event, sort_keys=True, indent=4, separators=(',', ': '))\n\n    job_id = event[\"CodePipeline.job\"][\"id\"] \n    user_parameters = event[\"CodePipeline.job\"][\"data\"][\"actionConfiguration\"][\"configuration\"][\"UserParameters\"]\n    stack_name = user_parameters.split(\"|\")[0]\n    test_stack_name = user_parameters.split(\"|\")[1]\n    stage = user_parameters.split(\"|\")[2]\n\n    print(\"looking for ApiUrl in {} Stack\".format(stack_name))\n    api_url, error = _get_property_from_stack(stack_name, \"ApiUrl\")\n    if not api_url:\n        _fail_job(job_id, error)\n        return\n\n    print(\"looking for TestFunction in {} Stack\".format(test_stack_name))\n    test_function, error = _get_property_from_stack(test_stack_name, \"TestFunction\")\n    if not test_function:\n        _fail_job(job_id, error)\n        return\n\n    lambda_client.invoke_async(\n      FunctionName=test_function,\n      InvokeArgs=json.dumps({\n        \"job_id\": job_id,\n        \"api_url\": api_url\n      })\n    )\n\ndef _get_property_from_stack(stack_name, property_key):\n    stack_data = cf.describe_stacks(StackName=stack_name)\n\n    if not stack_data or len(stack_data[\"Stacks\"]) == 0:\n        return None, \"Could not find stack\"\n        \n    current_stack = stack_data[\"Stacks\"][0]\n\n    if \"Outputs\" not in current_stack:\n        return None, \"Could not find outputs in stack\"\n        \n    for cur_output in current_stack[\"Outputs\"]:\n        if cur_output[\"OutputKey\"] == property_key:\n            return cur_output[\"OutputValue\"], None\n    \n    return None, \"Could not find {} output property in stack\".format(property_key)\n\ndef _complete_job(job_id):\n    cp.put_job_success_result(jobId=job_id)\n\ndef _fail_job(job_id, failure_reason):\n    cp.put_job_failure_result(\n            jobId=job_id,\n            failureDetails={\n                'type': 'JobFailed',\n                'message': failure_reason,\n                'externalExecutionId': uuid.uuid4().hex\n            }\n        )\n"
+                }
+            }
+        },
+        "CFNPipelinePolicy": {
+            "Type": "AWS::IAM::ManagedPolicy",
+            "Properties": {
+                "Description": "CloudFormation Pipeline Execution Policy",
+                "Path": "/",
+                "PolicyDocument": {
+                    "Version": "2012-10-17",
+                    "Statement": {
+                        "Effect": "Allow",
+                        "Action": [
+                            "cloudformation:CreateStack",
+                            "cloudformation:DescribeStacks",
+                            "cloudformation:DeleteStack",
+                            "cloudformation:UpdateStack",
+                            "cloudformation:CreateChangeSet",
+                            "cloudformation:ExecuteChangeSet",
+                            "cloudformation:DeleteChangeSet",
+                            "cloudformation:DescribeChangeSet",
+                            "cloudformation:SetStackPolicy",
+                            "cloudformation:SetStackPolicy",
+                            "cloudformation:ValidateTemplate",
+                            "codebuild:StartBuild",
+                            "codebuild:BatchGetBuilds"
+                        ],
+                        "Resource": "*"
+                    }
+                }
+            }
+        },
+        "CloudFormationExecutionRole": {
+            "Type": "AWS::IAM::Role",
+            "Properties": {
+                "AssumeRolePolicyDocument": {
+                    "Version": "2012-10-17",
+                    "Statement": {
+                        "Action": [
+                            "sts:AssumeRole"
+                        ],
+                        "Effect": "Allow",
+                        "Principal": {
+                            "Service": [
+                                "cloudformation.amazonaws.com"
+                            ]
+                        }
+                    }
+                },
+                "Path": "/",
+                "ManagedPolicyArns": [
+                    "arn:aws:iam::aws:policy/AdministratorAccess"
+                ]
+            }
+        },
+        "PipelineExecutionRole": {
+            "Type": "AWS::IAM::Role",
+            "Properties": {
+                "AssumeRolePolicyDocument": {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Action": [
+                                "sts:AssumeRole"
+                            ],
+                            "Effect": "Allow",
+                            "Principal": {
+                                "Service": [
+                                    "codepipeline.amazonaws.com"
+                                ]
+                            }
+                        }
+                    ]
+                },
+                "Path": "/",
+                "ManagedPolicyArns": [
+                    "arn:aws:iam::aws:policy/AWSCodeCommitFullAccess",
+                    "arn:aws:iam::aws:policy/AmazonS3FullAccess",
+                    {
+                        "Ref": "CFNPipelinePolicy"
+                    }
+                ],
+                "Policies": [
+                    {
+                        "PolicyName": "CodePipelineAccess",
+                        "PolicyDocument": {
+                            "Version": "2012-10-17",
+                            "Statement": [
+                                {
+                                    "Action": [
+                                        "iam:PassRole",
+                                        "lambda:InvokeFunction",
+                                        "lambda:ListFunctions",
+                                        "lambda:InvokeAsyc"
+                                    ],
+                                    "Effect": "Allow",
+                                    "Resource": "*"
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+        },
+        "Pipeline": {
+            "Type": "AWS::CodePipeline::Pipeline",
+            "Properties": {
+                "ArtifactStore": {
+                    "Location": {
+                        "Ref": "BuildArtifactsBucket"
+                    },
+                    "Type": "S3"
+                },
+                "Name": {
+                    "Fn::Sub": "${ServiceName}_pipeline"
+                },
+                "RoleArn": {
+                    "Fn::GetAtt": [
+                        "PipelineExecutionRole",
+                        "Arn"
+                    ]
+                },
+                "Stages": [
+                    {
+                        "Name": "Source",
+                        "Actions": [
+                            {
+                                "InputArtifacts": [],
+                                "Name": "Source",
+                                "ActionTypeId": {
+                                    "Category": "Source",
+                                    "Owner": "ThirdParty",
+                                    "Version": "1",
+                                    "Provider": "GitHub"
+                                }
+                            }
+                        ],
+                        "OutputArtifacts": [
+                            {
+                                "Name": "SourceOutput"
+                            }
+                        ],
+                        "Configuration": {
+                            "Owner": {
+                                "Ref": "GitHubUser"
+                            },
+                            "Repo": {
+                                "Ref": "GitHubRepo"
+                            },
+                            "Branch": {
+                                "Ref": "GitHubBranch"
+                            },
+                            "OAuthToken": {
+                                "Ref": "GitHubToken"
+                            }
+                        },
+                        "RunOrder": 1
+                    },
+                    {
+                        "Name": "Build",
+                        "Actions": [
+                            {
+                                "Name": "CodeBuild",
+                                "ActionTypeId": {
+                                    "Category": "Build",
+                                    "Owner": "AWS",
+                                    "Provider": "CodeBuild",
+                                    "Version": 1
+                                },
+                                "Configuration": {
+                                    "ProjectName": {
+                                        "Ref": "CodeBuildProject"
+                                    }
+                                },
+                                "InputArtifacts": [
+                                    {
+                                        "Name": "SourceZip"
+                                    }
+                                ],
+                                "OutputArtifacts": [
+                                    {
+                                        "Name": "BuiltZip"
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        "Name": "DeployTests",
+                        "Actions": [
+                            {
+                                "Name": "CreateChangeSet",
+                                "ActionTypeId": {
+                                    "Category": "Deploy",
+                                    "Owner": "AWS",
+                                    "Provider": "CloudFormation",
+                                    "Version": 1
+                                },
+                                "Configuration": {
+                                    "ActionMode": "CHANGE_SET_REPLACE",
+                                    "RoleArn": {
+                                        "Fn::GetAtt": [
+                                            "CloudFormationExecutionRole",
+                                            "Arn"
+                                        ]
+                                    },
+                                    "StackName": {
+                                        "Fn::Sub": "${ServiceName}-Stack-Tests"
+                                    },
+                                    "ChangeSetName": {
+                                        "Fn::Sub": "${ServiceName}-ChangeSet-Tests"
+                                    },
+                                    "TemplatePath": "BuiltZip::test-output_sam.yaml",
+                                    "Capabilities": "CAPABILITY_IAM"
+                                },
+                                "InputArtifacts": [
+                                    {
+                                        "Name": "BuiltZip"
+                                    }
+                                ],
+                                "OutputArtifacts": [
+                                    {
+                                        "Name": "TestChangeSet"
+                                    }
+                                ],
+                                "RunOrder": 1
+                            },
+                            {
+                                "Name": "ExecuteChangeSet",
+                                "ActionTypeId": {
+                                    "Category": "Deploy",
+                                    "Owner": "AWS",
+                                    "Provider": "CloudFormation",
+                                    "Version": 1
+                                },
+                                "Configuration": {
+                                    "ActionMode": "CHANGE_SET_EXECUTE",
+                                    "RoleArn": {
+                                        "Fn::GetAtt": [
+                                            "CloudFormationExecutionRole",
+                                            "Arn"
+                                        ]
+                                    },
+                                    "StackName": {
+                                        "Fn::Sub": "${ServiceName}-Stack-Tests"
+                                    },
+                                    "ChangeSetName": {
+                                        "Fn::Sub": "${ServiceName}-ChangeSet-Tests"
+                                    }
+                                },
+                                "OutputArtifacts": [
+                                    {
+                                        "Name": "ExecutedTestChangeSet"
+                                    }
+                                ],
+                                "RunOrder": 2
+                            }
+                        ]
+                    },
+                    {
+                        "Name": "Beta",
+                        "Actions": [
+                            {
+                                "Name": "CreateChangeSet",
+                                "ActionTypeId": {
+                                    "Category": "Deploy",
+                                    "Owner": "AWS",
+                                    "Provider": "CloudFormation",
+                                    "Version": 1
+                                },
+                                "Configuration": {
+                                    "ActionMode": "CHANGE_SET_REPLACE",
+                                    "RoleArn": {
+                                        "Fn::GetAtt": [
+                                            "CloudFormationExecutionRole",
+                                            "Arn"
+                                        ]
+                                    },
+                                    "StackName": {
+                                        "Fn::Sub": "${ServiceName}-Stack-Beta"
+                                    },
+                                    "ChangeSetName": {
+                                        "Fn::Sub": "${ServiceName}-ChangeSet-Beta"
+                                    },
+                                    "TemplatePath": "BuiltZip::app-output_sam.yaml",
+                                    "Capabilities": "CAPABILITY_IAM",
+                                    "ParameterOverrides": "{ \"Stage\": \"beta\" }"
+                                },
+                                "InputArtifacts": [
+                                    {
+                                        "Name": "BuiltZip"
+                                    }
+                                ],
+                                "RunOrder": 1
+                            },
+                            {
+                                "Name": "ExecuteChangeSet",
+                                "ActionTypeId": {
+                                    "Category": "Deploy",
+                                    "Owner": "AWS",
+                                    "Provider": "CloudFormation",
+                                    "Version": 1
+                                },
+                                "Configuration": {
+                                    "ActionMode": "CHANGE_SET_EXECUTE",
+                                    "RoleArn": {
+                                        "Fn::GetAtt": [
+                                            "CloudFormationExecutionRole",
+                                            "Arn"
+                                        ]
+                                    },
+                                    "StackName": {
+                                        "Fn::Sub": "${ServiceName}-Stack-Beta"
+                                    },
+                                    "ChangeSetName": {
+                                        "Fn::Sub": "${ServiceName}-ChangeSet-Beta"
+                                    }
+                                },
+                                "OutputArtifacts": [
+                                    {
+                                        "Name": {
+                                            "Fn::Sub": "${ServiceName}BetaChangeSet"
+                                        }
+                                    }
+                                ],
+                                "RunOrder": 2
+                            },
+                            {
+                                "Name": "IntegrationTests",
+                                "ActionTypeId": {
+                                    "Category": "Invoke",
+                                    "Owner": "AWS",
+                                    "Provider": "Lambda",
+                                    "Version": 1
+                                },
+                                "Configuration": {
+                                    "FunctionName": {
+                                        "Ref": "StartTestsFunction"
+                                    },
+                                    "UserParameters": {
+                                        "Fn::Sub": "${ServiceName}-Stack-Beta|${ServiceName}-Stack-Tests|beta"
+                                    }
+                                },
+                                "InputArtifacts": [
+                                    {
+                                        "Name": {
+                                            "Fn::Sub": "${ServiceName}BetaChangeSet"
+                                        }
+                                    }
+                                ],
+                                "RunOrder": 3
+                            }
+                        ]
+                    },
+                    {
+                        "Name": "Gamma",
+                        "Actions": [
+                            {
+                                "Name": "CreateChangeSet",
+                                "ActionTypeId": {
+                                    "Category": "Deploy",
+                                    "Owner": "AWS",
+                                    "Provider": "CloudFormation",
+                                    "Version": 1
+                                },
+                                "Configuration": {
+                                    "ActionMode": "CHANGE_SET_REPLACE",
+                                    "RoleArn": {
+                                        "Fn::GetAtt": [
+                                            "CloudFormationExecutionRole",
+                                            "Arn"
+                                        ]
+                                    },
+                                    "StackName": {
+                                        "Fn::Sub": "${ServiceName}-Stack-Gamma"
+                                    },
+                                    "ChangeSetName": {
+                                        "Fn::Sub": "${ServiceName}-ChangeSet-Gamma"
+                                    },
+                                    "TemplatePath": "BuiltZip::app-output_sam.yaml",
+                                    "Capabilities": "CAPABILITY_IAM",
+                                    "ParameterOverrides": "{ \"Stage\": \"gamma\" }"
+                                },
+                                "InputArtifacts": [
+                                    {
+                                        "Name": "BuiltZip"
+                                    }
+                                ],
+                                "RunOrder": 1
+                            },
+                            {
+                                "Name": "ExecuteChangeSet",
+                                "ActionTypeId": {
+                                    "Category": "Deploy",
+                                    "Owner": "AWS",
+                                    "Provider": "CloudFormation",
+                                    "Version": 1
+                                },
+                                "Configuration": {
+                                    "ActionMode": "CHANGE_SET_EXECUTE",
+                                    "RoleArn": {
+                                        "Fn::GetAtt": [
+                                            "CloudFormationExecutionRole",
+                                            "Arn"
+                                        ]
+                                    },
+                                    "StackName": {
+                                        "Fn::Sub": "${ServiceName}-Stack-Gamma"
+                                    },
+                                    "ChangeSetName": {
+                                        "Fn::Sub": "${ServiceName}-ChangeSet-Gamma"
+                                    }
+                                },
+                                "OutputArtifacts": [
+                                    {
+                                        "Name": {
+                                            "Fn::Sub": "${ServiceName}GammaChangeSet"
+                                        }
+                                    }
+                                ],
+                                "RunOrder": 2
+                            },
+                            {
+                                "Name": "IntegrationTests",
+                                "ActionTypeId": {
+                                    "Category": "Invoke",
+                                    "Owner": "AWS",
+                                    "Provider": "Lambda",
+                                    "Version": 1
+                                },
+                                "Configuration": {
+                                    "FunctionName": {
+                                        "Ref": "StartTestsFunction"
+                                    },
+                                    "UserParameters": {
+                                        "Fn::Sub": "${ServiceName}-Stack-Gamma|${ServiceName}-Stack-Tests|gamma"
+                                    }
+                                },
+                                "InputArtifacts": [
+                                    {
+                                        "Name": {
+                                            "Fn::Sub": "${ServiceName}GammaChangeSet"
+                                        }
+                                    }
+                                ],
+                                "RunOrder": 3
+                            }
+                        ]
+                    },
+                    {
+                        "Name": "Prod",
+                        "Actions": [
+                            {
+                                "Name": "DeploymentApproval",
+                                "ActionTypeId": {
+                                    "Category": "Approval",
+                                    "Owner": "AWS",
+                                    "Provider": "Manual",
+                                    "Version": 1
+                                },
+                                "RunOrder": 1
+                            },
+                            {
+                                "Name": "CreateChangeSet",
+                                "ActionTypeId": {
+                                    "Category": "Deploy",
+                                    "Owner": "AWS",
+                                    "Provider": "CloudFormation",
+                                    "Version": 1
+                                },
+                                "Configuration": {
+                                    "ActionMode": "CHANGE_SET_REPLACE",
+                                    "RoleArn": {
+                                        "Fn::GetAtt": [
+                                            "CloudFormationExecutionRole",
+                                            "Arn"
+                                        ]
+                                    },
+                                    "StackName": {
+                                        "Fn::Sub": "${ServiceName}-Stack-Prod"
+                                    },
+                                    "ChangeSetName": {
+                                        "Fn::Sub": "${ServiceName}-ChangeSet-Prod"
+                                    },
+                                    "TemplatePath": "BuiltZip::app-output_sam.yaml",
+                                    "Capabilities": "CAPABILITY_IAM",
+                                    "ParameterOverrides": "{ \"Stage\": \"prod\" }"
+                                },
+                                "InputArtifacts": [
+                                    {
+                                        "Name": "BuiltZip"
+                                    }
+                                ],
+                                "RunOrder": 2
+                            },
+                            {
+                                "Name": "ExecuteChangeSet",
+                                "ActionTypeId": {
+                                    "Category": "Deploy",
+                                    "Owner": "AWS",
+                                    "Provider": "CloudFormation",
+                                    "Version": 1
+                                },
+                                "Configuration": {
+                                    "ActionMode": "CHANGE_SET_EXECUTE",
+                                    "RoleArn": {
+                                        "Fn::GetAtt": [
+                                            "CloudFormationExecutionRole",
+                                            "Arn"
+                                        ]
+                                    },
+                                    "StackName": {
+                                        "Fn::Sub": "${ServiceName}-Stack-Prod"
+                                    },
+                                    "ChangeSetName": {
+                                        "Fn::Sub": "${ServiceName}-ChangeSet-Prod"
+                                    }
+                                },
+                                "OutputArtifacts": [
+                                    {
+                                        "Name": {
+                                            "Fn::Sub": "${ServiceName}ProdChangeSet"
+                                        }
+                                    }
+                                ],
+                                "RunOrder": 3
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
+    }
+}

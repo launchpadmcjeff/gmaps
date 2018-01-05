@@ -1,0 +1,70 @@
+{
+    "AWSTemplateFormatVersion": "2010-09-09",
+    "Description": "A stack for DynamoDB in serverless.",
+    "Parameters": {
+        "CodeBucketStackName": {
+            "Description": "The stack exporting code buckets.",
+            "Type": "String",
+            "MinLength": 1,
+            "MaxLength": 255,
+            "AllowedPattern": "^[a-zA-Z][-a-zA-Z0-9]*$",
+            "Default": "gmaps-codebucket",
+            "ConstraintDescription": "ApplicationName is a AWS Name Type. Ending with a dash is also illegal"
+        }
+    },
+    "Resources": {
+        "RestApi": {
+            "Type": "AWS::ApiGateway::RestApi",
+            "Properties": {
+                "Name": "DynamoDBOperations "
+            }
+        },
+        "RestResource": {
+            "Type": "AWS::ApiGateway::Resource",
+            "Properties": {
+                "ParentId": {
+                    "Ref": "RestApi"
+                },
+                "PathPart": "DynamoDBManager",
+                "RestApiId": "String"
+            }
+        },
+        "RestMethod": {
+            "Type": "AWS::ApiGateway::Method",
+            "Properties": {
+                "ApiKeyRequired": "false",
+                "AuthorizationType": "NONE",
+                "HttpMethod": "POST",
+                "Integration": {
+                    "IntegrationHttpMethod": "POST",
+                    "Type": "AWS",
+                    "Uri": {
+                        "Fn::ImportValue": {
+                            "Fn::Sub": "${ServerlessStackName}-LambdaARN"
+                        }
+                    }
+                }
+            }
+        },
+        "RestMethodResponse": {
+  "Type" : "AWS::ApiGateway::GatewayResponse",
+  "Properties" : {
+    "ResponseParameters" : { String:String, ... },
+    "ResponseTemplates" : { String:String, ... },
+    "ResponseType" : String,
+    "RestApiId" : {"Ref": "RestApi"},
+    "StatusCode" : "200"
+  }
+},
+"RestIntegrationResponse": {
+  "Type" : "AWS::ApiGateway::GatewayResponse",
+  "Properties" : {
+    "ResponseParameters" : { String:String, ... },
+    "ResponseTemplates" : { String:String, ... },
+    "ResponseType" : String,
+    "RestApiId" :  {"Ref": "RestApi"},
+    "StatusCode" : "200"
+  }
+}
+    }
+}

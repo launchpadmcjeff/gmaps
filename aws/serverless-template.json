@@ -1,0 +1,193 @@
+{
+    "AWSTemplateFormatVersion": "2010-09-09",
+    "Description": "A stack for serverless.",
+    "Parameters": {
+        "CodeBucketStackName": {
+            "Description": "The stack exporting code buckets.",
+            "Type": "String",
+            "MinLength": 1,
+            "MaxLength": 255,
+            "AllowedPattern": "^[a-zA-Z][-a-zA-Z0-9]*$",
+            "Default": "gmaps-codebucket",
+            "ConstraintDescription": "ApplicationName is a AWS Name Type. Ending with a dash is also illegal"
+        }
+    },
+    "Resources": {
+        "SignupLambdaRole": {
+            "Type": "AWS::IAM::Role",
+            "Properties": {
+                "AssumeRolePolicyDocument": {
+                    "Statement": [
+                        {
+                            "Action": [
+                                "sts:AssumeRole"
+                            ],
+                            "Effect": "Allow",
+                            "Principal": {
+                                "Service": [
+                                    "lambda.amazonaws.com"
+                                ]
+                            }
+                        }
+                    ],
+                    "Version": "2012-10-17"
+                },
+                "Path": "/",
+                "Policies": [
+                    {
+                        "PolicyName": "SignupLambdaRole",
+                        "PolicyDocument": {
+                            "Version": "2012-10-17",
+                            "Statement": [
+                                {
+                                    "Sid": "Stmt1428341300017",
+                                    "Action": [
+                                        "dynamodb:DeleteItem",
+                                        "dynamodb:GetItem",
+                                        "dynamodb:PutItem",
+                                        "dynamodb:Query",
+                                        "dynamodb:Scan",
+                                        "dynamodb:UpdateItem"
+                                    ],
+                                    "Effect": "Allow",
+                                    "Resource": "*"
+                                },
+                                {
+                                    "Sid": "",
+                                    "Resource": "*",
+                                    "Action": [
+                                        "logs:CreateLogGroup",
+                                        "logs:CreateLogStream",
+                                        "logs:PutLogEvents"
+                                    ],
+                                    "Effect": "Allow"
+                                },
+                                {
+                                    "Effect": "Allow",
+                                    "Action": [
+                                        "xray:PutTraceSegments",
+                                        "xray:PutTelemetryRecords"
+                                    ],
+                                    "Resource": [
+                                        "*"
+                                    ]
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+        },
+        "SignupLambda": {
+            "Type": "AWS::Lambda::Function",
+            "Properties": {
+                "Handler": "LambdaFunctionOverHttps.handler",
+                "Role": {
+                    "Fn::GetAtt": [
+                        "SignupLambdaRole",
+                        "Arn"
+                    ]
+                },
+                "Code": {
+                    "S3Bucket": {
+                        "Fn::ImportValue": {
+                            "Fn::Sub": "${CodeBucketStackName}-CodeBucket"
+                        }
+                    },
+                    "S3Key": "LambdaFunctionOverHttps.zip"
+                },
+                "Tags": [
+                    {
+                        "Key": "String",
+                        "Value": "String"
+                    }
+                ],
+                "Runtime": "nodejs6.10",
+                "Timeout": "3",
+                "MemorySize": "128",
+                "TracingConfig": {
+                    "Mode": "Active"
+                }
+            }
+        },
+        "WebsiteBucket": {
+            "Type": "AWS::S3::Bucket",
+            "Properties": {
+                "BucketName": {
+                    "Fn::Sub": "${AWS::StackName}-websitebucket-${AWS::Region}"
+                },
+                "Tags": [
+                    {
+                        "Key": "String",
+                        "Value": "String"
+                    }
+                ],
+                "VersioningConfiguration": {
+                    "Status": "Enabled"
+                },
+                "WebsiteConfiguration": {
+                    "ErrorDocument": "error.html",
+                    "IndexDocument": "index.html"
+                }
+            }
+        },
+        "WebsiteBucketPolicy": {
+            "Type": "AWS::S3::BucketPolicy",
+            "Properties": {
+                "Bucket": {
+                    "Ref": "WebsiteBucket"
+                },
+                "PolicyDocument": {
+                    "Statement": [
+                        {
+                            "Action": [
+                                "s3:GetObject"
+                            ],
+                            "Effect": "Allow",
+                            "Resource": {
+                                "Fn::Join": [
+                                    "",
+                                    [
+                                        "arn:aws:s3:::",
+                                        {
+                                            "Ref": "WebsiteBucket"
+                                        },
+                                        "/*"
+                                    ]
+                                ]
+                            },
+                            "Principal": "*"
+                        }
+                    ]
+                }
+            }
+        }
+    },
+    "Outputs": {
+        "SignupLambda": {
+            "Description": "The Lamda function called by APIGateway",
+            "Value": {
+                "Ref": "SignupLambda"
+            },
+            "Export": {
+                "Name": {
+                    "Fn::Sub": "${AWS::StackName}-SignupLambda"
+                }
+            }
+        },
+        "SignupLambdaArn": {
+            "Description": "The Lamda function ARN called by APIGateway",
+            "Value": {
+                "Fn::GetAt": [
+                    "SignupLambda",
+                    "Arn"
+                ]
+            },
+            "Export": {
+                "Name": {
+                    "Fn::Sub": "${AWS::StackName}-SignupLambda"
+                }
+            }
+        }
+    }
+}

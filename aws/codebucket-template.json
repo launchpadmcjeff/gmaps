@@ -1,0 +1,36 @@
+{
+    "AWSTemplateFormatVersion": "2010-09-09",
+    "Description": "A stack for serverless.",
+    "Resources": {
+        "CodeBucket": {
+            "Type": "AWS::S3::Bucket",
+            "Properties": {
+                "BucketName": {
+                    "Fn::Sub": "${AWS::StackName}-${AWS::Region}"
+                },
+                "Tags": [
+                    {
+                        "Key": "String",
+                        "Value": "String"
+                    }
+                ],
+                "VersioningConfiguration": {
+                    "Status": "Enabled"
+                }
+            }
+        }
+    },
+    "Outputs": {
+        "CodeBucket": {
+            "Description": "The CodeBucket",
+            "Value": {
+                "Ref": "CodeBucket"
+            },
+            "Export": {
+                "Name": {
+                    "Fn::Sub": "${AWS::StackName}-CodeBucket"
+                }
+            }
+        }
+    }
+}
